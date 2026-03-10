@@ -18,23 +18,19 @@ class CLIPDataset(Dataset):
         self.category = category
 
         # load datasets
-        self.img_paths, self.gt_paths, self.labels, self.types = self.load_dataset(k_shot,
-                                                                                   experiment_index)
+        self.img_paths, self.gt_paths, self.labels, self.types = self.load_dataset(
+            k_shot,experiment_index)
         # self.labels => good : 0, anomaly : 1
 
     def load_dataset(self, k_shot, experiment_index):
-
-        (train_img_tot_paths, train_gt_tot_paths, train_tot_labels, train_tot_types), \
-        (test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types) = self.load_function(self.category,
-                                                                                                      k_shot,
-                                                                                                      experiment_index)
+        (
+            train_img_tot_paths, train_gt_tot_paths, train_tot_labels, train_tot_types
+        ),(
+            test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
+        ) = self.load_function(self.category,k_shot,experiment_index)
 
         if self.phase == 'train':
-
-            return train_img_tot_paths, \
-                   train_gt_tot_paths, \
-                   train_tot_labels, \
-                   train_tot_types
+            return train_img_tot_paths, train_gt_tot_paths, train_tot_labels, train_tot_types
         else:
             return test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
 
