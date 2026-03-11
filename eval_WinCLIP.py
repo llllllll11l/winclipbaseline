@@ -25,7 +25,7 @@ def test(model,
     model.build_text_feature_gallery(class_name)
     logger.info('build text feature gallery finished.')
 
-    if train_data is not None:
+    if train_data is not None:   #only run in few-shot
         logger.info('begin build image feature gallery...')
         for (data, mask, label, name, img_type) in train_data:
             data = [model.transform(Image.fromarray(cv2.cvtColor(f.numpy(), cv2.COLOR_BGR2RGB))) for f in data]

@@ -36,6 +36,8 @@ class WinClipAD(torch.nn.Module):
 
         self.get_model(backbone, pretrained_dataset, scales)
         self.phrase_form = '{}'
+
+        #version V1
         self.version = 'V1'
 
         self.transform = transforms.Compose([
@@ -126,7 +128,7 @@ class WinClipAD(torch.nn.Module):
         normal_phrases = self.tokenizer(normal_phrases).to(self.device)
         abnormal_phrases = self.tokenizer(abnormal_phrases).to(self.device)
 
-        if self.version == 'V1':
+        if self.version == 'V1':  #always V1!
             normal_text_features = self.encode_text(normal_phrases)
             abnormal_text_features = self.encode_text(abnormal_phrases)
         elif self.version == 'V2':
