@@ -30,7 +30,6 @@ def test(model,
         for (data, mask, label, name, img_type) in train_data:
             data = [model.transform(Image.fromarray(cv2.cvtColor(f.numpy(), cv2.COLOR_BGR2RGB))) for f in data]
             data = torch.stack(data, dim=0)
-
             data = data.to(device)
             model.build_image_feature_gallery(data)
         logger.info('build image feature gallery finished.')
@@ -42,20 +41,16 @@ def test(model,
     names = []
 
     for (data, mask, label, name, img_type) in dataloader:
-
         data = [model.transform(Image.fromarray(f.numpy())) for f in data]
         data = torch.stack(data, dim=0)
-
         for d, n, l, m in zip(data, name, label, mask):
             test_imgs += [denormalization(d.cpu().numpy())]
             l = l.numpy()
             m = m.numpy()
             m[m > 0] = 1
-
             names += [n]
             gt_list += [l]
             gt_mask_list += [m]
-
         data = data.to(device)
         score = model(data)
         scores += score
@@ -70,7 +65,7 @@ def test(model,
 
 
 def main(args):
-    kwargs = vars(args)
+    kwargs = vars(args) # :dict[str, Any]
 
     logger.info('==========running parameters=============')
     for k, v in kwargs.items():
