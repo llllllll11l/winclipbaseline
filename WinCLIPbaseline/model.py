@@ -37,7 +37,9 @@ class WinClipAD(torch.nn.Module):
         self.get_model(backbone, pretrained_dataset, scales)
         self.phrase_form = '{}'
 
-        #text feature gallery building version
+        # text feature gallery building version
+        # V1: tokens->mean->normalize->
+        # V2: tokens->normalize->mean->
         self.version = 'V2'
 
         self.transform = transforms.Compose([
