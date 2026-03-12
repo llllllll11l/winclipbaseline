@@ -180,6 +180,7 @@ class WinClipAD(torch.nn.Module):
         return anomaly_map
 
     def forward(self, images):
+        # patch_tokens :torch.Tensor[B,L,D]
         _, patch_tokens = self.encode_image(images)
 
         if patch_tokens is None:
