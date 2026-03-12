@@ -46,10 +46,10 @@ def test(model,
     # -> test(..., dataloader, ...)
     # -> for (data, ...) in dataloader
     for (data, mask, label, name, img_type) in dataloader: # data.shape=[B:default=128,H:1024,W:1024,C:3]
-        data = [model.transform(Image.fromarray(f.numpy())) for f in data]
+        # numpy.ndarray->PIL-transform->tensor
+        data = [model.transform(Image.fromarray(cv2.cvtColor(f.numpy(), cv2.COLOR_BGR2RGB))) for f in data]
         data = torch.stack(data, dim=0)
         # data.shape=[B:128,C:3,H:240,W:240]
-
         for dt, nm, lbl, msk in zip(data, name, label, mask): # collect ground truth
             # label--picture level gt; mask--pixel level gt
             test_imgs += [denormalization(dt.cpu().numpy())]
@@ -60,8 +60,7 @@ def test(model,
             gt_list += [lbl]
             gt_mask_list += [msk]
         data = data.to(device)
-        score = model(data) # model(data)--Python Interpreters-->torch.nn.Module.__call__(data)
-                            #            --PyTorch Frame-->model.forward(data)
+        score = model(data) # model(data)-Python Interpreters->torch.nn.Module.__call__(data)-PyTorch->model.forward(data)
         scores += score
 
     test_imgs, scores, gt_mask_list = specify_resolution(test_imgs, scores, gt_mask_list, resolution=(resolution, resolution))
