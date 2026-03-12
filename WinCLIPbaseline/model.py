@@ -37,8 +37,8 @@ class WinClipAD(torch.nn.Module):
         self.get_model(backbone, pretrained_dataset, scales)
         self.phrase_form = '{}'
 
-        #version V1
-        self.version = 'V1'
+        #text feature gallery building version
+        self.version = 'V2'
 
         self.transform = transforms.Compose([
             transforms.Resize((kwargs['img_resize'], kwargs['img_resize']), Image.BICUBIC),
@@ -89,13 +89,11 @@ class WinClipAD(torch.nn.Module):
             # pooled 一般已经在最终空间，先归一化
             pooled = pooled / pooled.norm(dim=-1, keepdim=True)
 
-            # 把 patch tokens 投影到和 text_features 一样的维度
+            # project patch tokens
             visual = self.model.visual
-
             # 如果有 ln_post，先做 layer norm
             if hasattr(visual, 'ln_post') and visual.ln_post is not None:
                 tokens = visual.ln_post(tokens)
-
             # 如果有 proj，投影到 CLIP embedding space
             if hasattr(visual, 'proj') and visual.proj is not None:
                 tokens = tokens @ visual.proj
@@ -128,7 +126,7 @@ class WinClipAD(torch.nn.Module):
         normal_phrases = self.tokenizer(normal_phrases).to(self.device)
         abnormal_phrases = self.tokenizer(abnormal_phrases).to(self.device)
 
-        if self.version == 'V1':  #always V1!
+        if self.version == 'V1':  #always V1
             normal_text_features = self.encode_text(normal_phrases)
             abnormal_text_features = self.encode_text(abnormal_phrases)
         elif self.version == 'V2':

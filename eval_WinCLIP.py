@@ -39,26 +39,36 @@ def test(model,
     gt_list = []
     gt_mask_list = []
     names = []
-
-    for (data, mask, label, name, img_type) in dataloader:
+    # main()
+    # -> get_dataloader_from_args()
+    # -> CLIPDataset(...)
+    # -> DataLoader(...)
+    # -> test(..., dataloader, ...)
+    # -> for (data, ...) in dataloader
+    for (data, mask, label, name, img_type) in dataloader: # data.shape=[B:default=128,H:1024,W:1024,C:3]
         data = [model.transform(Image.fromarray(f.numpy())) for f in data]
         data = torch.stack(data, dim=0)
-        for d, n, l, m in zip(data, name, label, mask):
-            test_imgs += [denormalization(d.cpu().numpy())]
-            l = l.numpy()
-            m = m.numpy()
-            m[m > 0] = 1
-            names += [n]
-            gt_list += [l]
-            gt_mask_list += [m]
+        # data.shape=[B:128,C:3,H:240,W:240]
+
+        for dt, nm, lbl, msk in zip(data, name, label, mask): # collect ground truth
+            # label--picture level gt; mask--pixel level gt
+            test_imgs += [denormalization(dt.cpu().numpy())]
+            lbl = lbl.numpy()
+            msk = msk.numpy()
+            msk[msk > 0] = 1 # 二值化
+            names += [nm]
+            gt_list += [lbl]
+            gt_mask_list += [msk]
         data = data.to(device)
-        score = model(data)
+        score = model(data) # model(data)--Python Interpreters-->torch.nn.Module.__call__(data)
+                            #            --PyTorch Frame-->model.forward(data)
         scores += score
 
     test_imgs, scores, gt_mask_list = specify_resolution(test_imgs, scores, gt_mask_list, resolution=(resolution, resolution))
     result_dict = metric_cal(np.array(scores), gt_list, gt_mask_list, cal_pro=cal_pro)
 
-    if is_vis:
+    # visualize
+    if is_vis: # default=true
         plot_sample_cv2(names, test_imgs, {'WinClip': scores}, gt_mask_list, save_folder=img_dir)
 
     return result_dict
@@ -88,12 +98,13 @@ def main(args):
     kwargs['device'] = device
 
     # prepare the experiment dir
+    # type=str
     model_dir, img_dir, logger_dir, model_name, csv_path = get_dir_from_args(**kwargs)
 
     # get the train dataloader
     if kwargs['k_shot'] > 0:
         train_dataloader, train_dataset_inst = get_dataloader_from_args(phase='train', perturbed=False, **kwargs)
-    else:
+    else:   #zero shot
         train_dataloader, train_dataset_inst = None, None
 
     # get the test dataloader
@@ -103,6 +114,7 @@ def main(args):
     kwargs['out_size_w'] = kwargs['resolution']
 
     # get the model
+    # torch.nn.Module
     model = WinClipAD(**kwargs)
     model = model.to(device)
 
@@ -111,7 +123,7 @@ def main(args):
                    class_name=kwargs['class_name'], cal_pro=kwargs['cal_pro'], train_data=train_dataloader,
                    resolution=kwargs['resolution'])
 
-    logger.info(f"\n")
+    logger.info("\n")
 
     for k, v in metrics.items():
         logger.info(f"{kwargs['class_name']}======={k}: {v:.2f}")
