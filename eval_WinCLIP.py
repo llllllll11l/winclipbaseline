@@ -7,7 +7,6 @@ from utils.training_utils import *
 from WinCLIPbaseline import *
 from utils.eval_utils import *
 
-
 def test(model,
          dataloader: DataLoader,
          device: str,
