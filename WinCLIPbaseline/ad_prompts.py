@@ -1,31 +1,35 @@
 state_level_normal_prompts = [
     '{}',
-    'flawless {}',
-    'perfect {}',
-    'unblemished {}',
-    '{} without flaw',
-    '{} without defect',
-    '{} without damage'
+    'a clean {}',
+    'a flawless {}',
+    'a perfect {}',
+    'an intact {}',
+    'a normal {}',
+    'a good {}',
+    'a {} without defect',
+    'a {} without damage',
  #'three flawless, perfect and unblemished {} with different colors without any defect, flaw or damage in a bowl',
 #    'flawless, perfect and unblemished {} without any defect, flaw or damage'
 ]
 
 state_level_abnormal_prompts = [
- #   'damaged {} with flaw or defect or damage',
+    'damaged {} with flaw or defect or damage',
     'damaged {}',
-    '{} with flaw',
+    'broken {}',
+    'defective {}',
     '{} with defect',
+    '{} with flaw',
     '{} with damage',
- ##   '{} with missing parts'
- ##   '{} with print',  # added
- ##    '{} with hole',  # added
- ##   '{} with crack', # added
- ##   '{} with scratch', # added
- ##    '{} with discoloration',
- ##    '{} with stains',
- ##    '{} with missing parts',
- ##    '{} with broken parts',
- ##    '{} with bumpy surfaces'
+    '{} with crack',
+    '{} with scratch',
+    '{} with hole',
+    '{} with missing parts',
+    '{} with contamination',
+    '{} with print',  # added
+    '{} with discoloration',
+    '{} with stains',
+    '{} with broken parts',
+    '{} with bumpy surfaces'
 ]
 
 #DIY_list = [

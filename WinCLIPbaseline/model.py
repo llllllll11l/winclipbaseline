@@ -308,31 +308,69 @@ class WinClipAD(torch.nn.Module):
         # window_features: [B, num_windows, D]
         # text_features: [2, D]
         text_features = self.text_features.to(window_features.dtype)
+
         logits = 100.0 * window_features @ text_features.T
         # logits/probs: [B, num_windows, 2]
         probs = logits.softmax(dim=-1)
         return probs[:, :, 1]
+        """
+        normal_sim = window_features @ text_features[0].T
+        abnormal_sim = window_features @ text_features[1].T
+        score = abnormal_sim - normal_sim
+        """
 
     def calculate_textual_anomaly_map(self, window_embeddings: List[torch.Tensor]):
         batch_size = window_embeddings[0].shape[0]
         num_patches = self.grid_size[0] * self.grid_size[1]
+        k = 3 # top k
 
         patch_score_sum = window_embeddings[0].new_zeros(batch_size, num_patches)  # [B, L]
         patch_cover_count = window_embeddings[0].new_zeros(1, num_patches)  # [1, L]
+        weighted_patch_score_sum = window_embeddings[0].new_zeros(batch_size, num_patches)
+        weighted_sum = window_embeddings[0].new_zeros(batch_size, num_patches)
+        scale_patch_scores = []
 
         for window_features, (_, window_masks) in zip(window_embeddings, self._iter_window_buffers()):
             window_scores = self.calculate_textual_anomaly_score(window_features)
             # window_scores: [B, num_windows]
             window_masks = window_masks.to(device=window_scores.device, dtype=window_scores.dtype)
             # window_masks: [num_windows, L]
+            """
+            mean
             patch_score_sum += window_scores @ window_masks
             patch_cover_count += window_masks.sum(dim=0, keepdim=True)
+            weighted mean: weight = window_score ** 2  worse than mean
+            weighted_patch_score_sum += (window_scores **2 @ window_masks)
+            weighted_sum += window_scores @ window_masks
+            """
+            masked_scores = window_scores.unsqueeze(-1) * window_masks.unsqueeze(0)
+            # [B, num_windows, L]
+            masked_scores = masked_scores.masked_fill(window_masks.unsqueeze(0) == 0, float('-inf'))
 
-        # 直接mean, 可以改进
-        patch_scores = patch_score_sum / patch_cover_count.clamp_min(1.0)
+            # top-k within this scale
+            topk_scores, _ = torch.topk(masked_scores, k=k, dim=1)  # [B, k, L]
+            valid_mask = torch.isfinite(topk_scores)
+            topk_scores = torch.where(valid_mask, topk_scores, torch.zeros_like(topk_scores))
+            valid_count = valid_mask.sum(dim=1).clamp_min(1)
+
+            scale_scores = topk_scores.sum(dim=1) / valid_count  # [B, L]
+            scale_patch_scores.append(scale_scores)
         # patch_scores: [B, L]
+        """
+        mean
+        patch_scores = patch_score_sum / patch_cover_count.clamp_min(1.0)
+        weighted mean: weight = window_score ** 2
+        patch_scores = weighted_patch_score_sum / weighted_sum.clamp_min(1e-6)
+        """
+        # mean across scales
+        patch_scores = torch.stack(scale_patch_scores, dim=0).max(dim=0).values  # [B, L]
+        # patch_scores = (patch_scores - patch_scores.min(dim=1, keepdim=True)[0]) / (
+        #         patch_scores.max(dim=1, keepdim=True)[0] - patch_scores.min(dim=1, keepdim=True)[0] + 1e-6
+        # )
+
         anomaly_map = patch_scores.reshape(batch_size, self.grid_size[0], self.grid_size[1]).unsqueeze(1)
         # anomaly_map: [B, 1, Gh, Gw]
+        anomaly_map = F.avg_pool2d(anomaly_map, kernel_size=3, stride=1, padding=1)
         return anomaly_map
 
     def build_image_feature_gallery(self, images: torch.Tensor):

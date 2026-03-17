@@ -147,7 +147,7 @@ def get_args():
     argument_parser.add_argument('--vis', type=str2bool, choices=[True, False], default=True)
     argument_parser.add_argument("--root-dir", type=str, default="./result_winclip")
     argument_parser.add_argument("--load-memory", type=str2bool, default=True)
-    argument_parser.add_argument("--cal-pro", type=str2bool, default=False)
+    argument_parser.add_argument("--cal-pro", type=str2bool, default=True)
     argument_parser.add_argument("--experiment_index", type=int, default=0)
     argument_parser.add_argument("--gpu-id", type=int, default=0)
 

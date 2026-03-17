@@ -1,8 +1,0 @@
-1.	visual encoder 调用方式
-从“整图一次编码”改成“整图 + 多个 window 单独编码”。
-2.	window 生成逻辑
-不是 final patch_tokens 上切窗口；而是从 patch embed 后、transformer 前 选窗口 token。
-3.	score 计算逻辑
-从 patch_tokens @ text_features.T 改成 window_features @ text_features.T。
-4.	anomaly map 聚合逻辑
-从“直接 reshape patch 分数”改成“window 分数 scatter 回图上，再做 overlap 融合”。

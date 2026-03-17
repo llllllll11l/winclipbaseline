@@ -87,7 +87,7 @@ def cal_pro_metric(labeled_imgs, score_imgs, fpr_thresh=0.3, max_steps=200):
                 x_min, y_min, x_max, y_max = prop.bbox
                 cropped_pred_label = binary_score_maps[i][x_min:x_max, y_min:y_max]
                 # cropped_mask = masks[i][x_min:x_max, y_min:y_max]
-                cropped_mask = prop.filled_image  # corrected!
+                cropped_mask = prop.image_filled  # corrected!
                 intersection = np.logical_and(cropped_pred_label, cropped_mask).astype(np.float32).sum()
                 pro.append(intersection / prop.area)
             # iou (per image level)
