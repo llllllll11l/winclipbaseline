@@ -160,6 +160,11 @@ def get_args():
     argument_parser.add_argument("--backbone", type=str, default="ViT-B-16-plus-240",
                         choices=['ViT-B-16-plus-240'])
     argument_parser.add_argument("--pretrained_dataset", type=str, default="laion400m_e32")
+    argument_parser.add_argument("--use-adapter", type=str2bool, default=False)
+    argument_parser.add_argument("--adapter-hidden-dim", type=int, default=256)
+    argument_parser.add_argument("--adapter-dropout", type=float, default=0.0)
+    argument_parser.add_argument("--adapter-residual-scale", type=float, default=1.0)
+    argument_parser.add_argument("--adapter-checkpoint", type=str, default="")
 
     argument_parser.add_argument("--use-cpu", type=int, default=0)
 

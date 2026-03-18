@@ -7,6 +7,7 @@ from torchvision import transforms
 from loguru import logger
 
 from . import CLIPAD
+from .adapter import ResidualAdapter
 from .ad_prompts import *
 valid_backbones = ["ViT-B-16-plus-240"]
 valid_pretrained_datasets = ["laion400m_e32"]
@@ -42,9 +43,14 @@ class WinClipAD(torch.nn.Module):
 
         self.out_size_h = out_size_h
         self.out_size_w = out_size_w
-        self.precision = "fp16"  # keep original project setting
         self.device = device
+        self.precision = "fp16" if device == "cuda" else "fp32"
         self.scales = tuple(int(scale) for scale in scales)
+        self.use_adapter = bool(kwargs.get("use_adapter", False))
+        self.adapter_hidden_dim = int(kwargs.get("adapter_hidden_dim", 256))
+        self.adapter_dropout = float(kwargs.get("adapter_dropout", 0.0))
+        self.adapter_residual_scale = float(kwargs.get("adapter_residual_scale", 1.0))
+        self.adapter_checkpoint = kwargs.get("adapter_checkpoint", "")
 
         self.get_model(backbone, pretrained_dataset, self.scales)
         self.phrase_form = "{}"
@@ -84,6 +90,7 @@ class WinClipAD(torch.nn.Module):
         )
         tokenizer = CLIPAD.get_tokenizer(backbone)
         model.eval().to(self.device)
+        model_dtype = next(model.parameters()).dtype
 
         self.model = model
         self.tokenizer = tokenizer
@@ -91,6 +98,17 @@ class WinClipAD(torch.nn.Module):
         self.abnormal_text_features = None
         self.text_features = None
         self.grid_size = model.visual.grid_size
+        self.feature_dim = int(model.visual.output_dim)
+        self.adapter = None
+        if self.use_adapter:
+            self.adapter = ResidualAdapter(
+                embed_dim=self.feature_dim,
+                hidden_dim=self.adapter_hidden_dim,
+                dropout=self.adapter_dropout,
+                residual_scale=self.adapter_residual_scale,
+            ).to(device=self.device, dtype=model_dtype)
+            if self.adapter_checkpoint:
+                self.load_adapter_checkpoint(self.adapter_checkpoint)
         self._prepare_window_masks()
         logger.info(f"grid_size: {self.grid_size}")
 
@@ -183,14 +201,14 @@ class WinClipAD(torch.nn.Module):
                 normal_text_feature = self.encode_text(normal_phrases[phrase_id].unsqueeze(0))
                 normal_text_feature = normal_text_feature / normal_text_feature.norm(dim=-1, keepdim=True)
                 normal_text_features.append(normal_text_feature)
-            normal_text_features = torch.cat(normal_text_features, 0).half()
+            normal_text_features = torch.cat(normal_text_features, 0)
 
             abnormal_text_features = []
             for phrase_id in range(abnormal_phrases.size(0)):
                 abnormal_text_feature = self.encode_text(abnormal_phrases[phrase_id].unsqueeze(0))
                 abnormal_text_feature = abnormal_text_feature / abnormal_text_feature.norm(dim=-1, keepdim=True)
                 abnormal_text_features.append(abnormal_text_feature)
-            abnormal_text_features = torch.cat(abnormal_text_features, 0).half()
+            abnormal_text_features = torch.cat(abnormal_text_features, 0)
         else:
             raise NotImplementedError
 
@@ -295,14 +313,18 @@ class WinClipAD(torch.nn.Module):
     def encode_window_embeddings(self, patch_embeddings: torch.Tensor) -> List[torch.Tensor]:
         scale_outputs = [[] for _ in self.scales]
 
-        # Encode per image to keep memory bounded when batch_size is large.
         for image_idx in range(patch_embeddings.shape[0]):
             single_image_patches = patch_embeddings[image_idx : image_idx + 1]
             for scale_idx, (window_idxes, _) in enumerate(self._iter_window_buffers()):
                 scale_outputs[scale_idx].append(self.encode_selected_patches(single_image_patches, window_idxes))
 
-        # Each item is [B, num_windows_at_scale, D]
+        # Each [B, num_windows_at_scale, D]
         return [torch.cat(outputs, dim=0) for outputs in scale_outputs]
+
+    def adapt_window_embeddings(self, window_embeddings: List[torch.Tensor]) -> List[torch.Tensor]:
+        if self.adapter is None:
+            return window_embeddings
+        return [self.adapter(scale_window_embeddings) for scale_window_embeddings in window_embeddings]
 
     def calculate_textual_anomaly_score(self, window_features: torch.Tensor):
         # window_features: [B, num_windows, D]
@@ -336,10 +358,10 @@ class WinClipAD(torch.nn.Module):
             window_masks = window_masks.to(device=window_scores.device, dtype=window_scores.dtype)
             # window_masks: [num_windows, L]
             """
-            mean
+            # mean
             patch_score_sum += window_scores @ window_masks
             patch_cover_count += window_masks.sum(dim=0, keepdim=True)
-            weighted mean: weight = window_score ** 2  worse than mean
+            # weighted mean: weight = window_score ** 2  worse than mean
             weighted_patch_score_sum += (window_scores **2 @ window_masks)
             weighted_sum += window_scores @ window_masks
             """
@@ -376,8 +398,7 @@ class WinClipAD(torch.nn.Module):
     def build_image_feature_gallery(self, images: torch.Tensor):
         raise NotImplementedError("Few-shot image gallery is not implemented")
 
-    @torch.no_grad()
-    def forward(self, images: torch.Tensor):
+    def compute_anomaly_map(self, images: torch.Tensor) -> torch.Tensor:
         if self.text_features is None:
             raise RuntimeError("Text feature gallery is empty.")
 
@@ -385,6 +406,7 @@ class WinClipAD(torch.nn.Module):
         patch_embeddings = self.patch_embed(images)
         # patch_embeddings: [B, L, width]
         window_embeddings = self.encode_window_embeddings(patch_embeddings)
+        window_embeddings = self.adapt_window_embeddings(window_embeddings)
         anomaly_map = self.calculate_textual_anomaly_map(window_embeddings)
         anomaly_map = F.interpolate(
             anomaly_map,
@@ -393,12 +415,51 @@ class WinClipAD(torch.nn.Module):
             align_corners=False,
         )
         # anomaly_map: [B, 1, out_size_h, out_size_w]
+        return anomaly_map
 
+    @torch.no_grad()
+    def forward(self, images: torch.Tensor):
+        anomaly_map = self.compute_anomaly_map(images)
         am_np = anomaly_map.squeeze(1).cpu().numpy()
         return [am_np[i] for i in range(am_np.shape[0])]
 
+    def freeze_backbone(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+        self.model.eval()
+
+    def get_trainable_parameters(self):
+        if self.adapter is None:
+            return []
+        return self.adapter.parameters()
+
+    def get_adapter_state_dict(self):
+        if self.adapter is None:
+            raise RuntimeError("Adapter is not enabled.")
+        return self.adapter.state_dict()
+
+    def load_adapter_checkpoint(self, checkpoint_path: str):
+        if self.adapter is None:
+            raise RuntimeError("Adapter is not enabled.")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        if isinstance(checkpoint, dict):
+            if "adapter" in checkpoint:
+                checkpoint = checkpoint["adapter"]
+            elif "state_dict" in checkpoint:
+                checkpoint = checkpoint["state_dict"]
+        self.adapter.load_state_dict(checkpoint, strict=True)
+        logger.info(f"Loaded adapter checkpoint from {checkpoint_path}")
+
     def train_mode(self):
-        self.model.train()
+        super().train()
+        if self.adapter is None:
+            self.model.train()
+        else:
+            self.model.eval()
+            self.adapter.train()
 
     def eval_mode(self):
+        super().eval()
         self.model.eval()
+        if self.adapter is not None:
+            self.adapter.eval()
