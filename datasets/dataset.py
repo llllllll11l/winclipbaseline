@@ -6,33 +6,56 @@ from torch.utils.data import Dataset
 
 
 class CLIPDataset(Dataset):
-    def __init__(self, load_function, category, phase, k_shot,
-                 experiment_index=0):
-
+    def __init__(self, load_function, category, phase, k_shot, experiment_index=0):
         self.load_function = load_function
         self.phase = phase
+        self.experiment_index = experiment_index
 
         assert k_shot in [0, 1, 5, 10]
         assert experiment_index in [0, 1, 2]
 
         self.category = category
-
-        # load datasets
         self.img_paths, self.gt_paths, self.labels, self.types = self.load_dataset(
-            k_shot,experiment_index)
-        # self.labels => good : 0, anomaly : 1
+            k_shot, experiment_index
+        )
+
+    def _split_test_subset(self, img_paths, gt_paths, labels, types, ratio=0.8):
+        n = len(img_paths)
+        indices = np.arange(n)
+        rng = np.random.RandomState(1000 + self.experiment_index)
+        rng.shuffle(indices)
+
+        split = int(n * ratio)
+        if self.phase == "train_eval":
+            selected = indices[:split]
+        else:
+            selected = indices[split:]
+
+        return (
+            [img_paths[i] for i in selected],
+            [gt_paths[i] for i in selected],
+            [labels[i] for i in selected],
+            [types[i] for i in selected],
+        )
 
     def load_dataset(self, k_shot, experiment_index):
         (
             train_img_tot_paths, train_gt_tot_paths, train_tot_labels, train_tot_types
-        ),(
+        ), (
             test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
-        ) = self.load_function(self.category,k_shot,experiment_index)
+        ) = self.load_function(self.category, k_shot, experiment_index)
 
-        if self.phase == 'train':
+        if self.phase == "train":
             return train_img_tot_paths, train_gt_tot_paths, train_tot_labels, train_tot_types
-        else:
-            return test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
+        if self.phase == "train_eval":
+            return self._split_test_subset(
+                test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
+            )
+        if self.phase == "val_eval":
+            return self._split_test_subset(
+                test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
+            )
+        return test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types
 
     def __len__(self):
         return len(self.img_paths)

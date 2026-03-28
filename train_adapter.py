@@ -7,10 +7,14 @@ import torch
 from PIL import Image
 from loguru import logger
 
-from datasets import get_dataloader_from_args
+from datasets import dataset_classes, get_dataloader_from_args
 from utils.training_utils import get_dir_from_args, setup_seed
 from WinCLIPbaseline import WinClipAD
 
+# ssh -p 33403 root@connect.westd.seetacloud.com
+# gLGXamdG5CaQ
+# scp -rP 33403 ~/Desktop/winclipbaseline root@connect.westd.seetacloud.com:/clip
+# scp -rP 33403 ~/Downloads/mvtec_anomaly_detection.tar.xz root@connect.westd.seetacloud.com:/clip
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
@@ -39,44 +43,67 @@ def preprocess_batch(model: WinClipAD, batch):
     return images, masks, labels
 
 
-def evaluate(model, dataloader, device):
+def resolve_training_classes(dataset: str, class_name: str):
+    if class_name == "all":
+        return list(dataset_classes[dataset])
+    return [class_name]
+
+
+def build_dataloaders_for_classes(phase, classes, kwargs):
+    dataloaders = {}
+    for class_name in classes:
+        class_kwargs = dict(kwargs)
+        class_kwargs["class_name"] = class_name
+        dataloader, _ = get_dataloader_from_args(phase=phase, **class_kwargs)
+        dataloaders[class_name] = dataloader
+    return dataloaders
+
+
+def compute_losses(model, batch, device, bce):
+    images, masks, labels = preprocess_batch(model, batch)
+    images = images.to(device)
+    masks = masks.to(device)
+    labels = labels.to(device)
+
+    anomaly_map = model.compute_anomaly_map(images)
+    image_scores = anomaly_map.flatten(1).max(dim=1).values.unsqueeze(1)
+
+    seg_loss = bce(anomaly_map.float().clamp(1e-6, 1 - 1e-6), masks.float())
+    cls_loss = bce(image_scores.float().clamp(1e-6, 1 - 1e-6), labels.float())
+    return seg_loss, cls_loss
+
+
+def evaluate(model, dataloaders, device):
     model.eval_mode()
     total_loss = 0.0
     total_batches = 0
     bce = torch.nn.BCELoss()
 
     with torch.no_grad():
-        for batch in dataloader:
-            images, masks, labels = preprocess_batch(model, batch)
-            images = images.to(device)
-            masks = masks.to(device)
-            labels = labels.to(device)
-
-            anomaly_map = model.compute_anomaly_map(images)
-            image_scores = anomaly_map.flatten(1).max(dim=1).values.unsqueeze(1)
-
-            seg_loss = bce(anomaly_map.clamp(1e-6, 1 - 1e-6), masks)
-            cls_loss = bce(image_scores.clamp(1e-6, 1 - 1e-6), labels)
-            total_loss += (seg_loss + cls_loss).item()
-            total_batches += 1
+        for class_name, dataloader in dataloaders.items():
+            model.build_text_feature_gallery(class_name)
+            for batch in dataloader:
+                seg_loss, cls_loss = compute_losses(model, batch, device, bce)
+                total_loss += (seg_loss + cls_loss).item()
+                total_batches += 1
 
     if total_batches == 0:
         raise RuntimeError("Evaluation dataloader is empty.")
     return total_loss / total_batches
 
 
-def train(model, train_loader, val_loader, device, args, ckpt_dir):
+def train(model, train_loaders, val_loaders, device, args, ckpt_dir):
     model.freeze_backbone()
-    model.build_text_feature_gallery(args.class_name)
 
     parameters = list(model.get_trainable_parameters())
     if not parameters:
-        raise RuntimeError("Adapter is not enabled, nothing to train.")
+        raise RuntimeError("Adapter is not enabled.")
 
     optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay)
     bce = torch.nn.BCELoss()
     best_val_loss = float("inf")
-    best_path = os.path.join(ckpt_dir, f"{args.class_name}_adapter_best.pt")
+    checkpoint_stem = f"{args.dataset}_shared" if args.class_name == "all" else args.class_name
+    best_path = os.path.join(ckpt_dir, f"{checkpoint_stem}_adapter_best.pt")
 
     for epoch in range(1, args.epochs + 1):
         model.train_mode()
@@ -85,26 +112,19 @@ def train(model, train_loader, val_loader, device, args, ckpt_dir):
         epoch_cls_loss = 0.0
         num_batches = 0
 
-        for batch in train_loader:
-            images, masks, labels = preprocess_batch(model, batch)
-            images = images.to(device)
-            masks = masks.to(device)
-            labels = labels.to(device)
+        for class_name, train_loader in train_loaders.items():
+            model.build_text_feature_gallery(class_name)
+            for batch in train_loader:
+                optimizer.zero_grad(set_to_none=True)
+                seg_loss, cls_loss = compute_losses(model, batch, device, bce)
+                loss = args.seg_loss_weight * seg_loss + args.cls_loss_weight * cls_loss
+                loss.backward()
+                optimizer.step()
 
-            optimizer.zero_grad(set_to_none=True)
-            anomaly_map = model.compute_anomaly_map(images)
-            image_scores = anomaly_map.flatten(1).max(dim=1).values.unsqueeze(1)
-
-            seg_loss = bce(anomaly_map.clamp(1e-6, 1 - 1e-6), masks)
-            cls_loss = bce(image_scores.clamp(1e-6, 1 - 1e-6), labels)
-            loss = args.seg_loss_weight * seg_loss + args.cls_loss_weight * cls_loss
-            loss.backward()
-            optimizer.step()
-
-            epoch_loss += loss.item()
-            epoch_seg_loss += seg_loss.item()
-            epoch_cls_loss += cls_loss.item()
-            num_batches += 1
+                epoch_loss += loss.item()
+                epoch_seg_loss += seg_loss.item()
+                epoch_cls_loss += cls_loss.item()
+                num_batches += 1
 
         if num_batches == 0:
             raise RuntimeError("Training dataloader is empty.")
@@ -117,10 +137,10 @@ def train(model, train_loader, val_loader, device, args, ckpt_dir):
             f"seg_loss={mean_seg_loss:.4f} cls_loss={mean_cls_loss:.4f}"
         )
 
-        if val_loader is None:
+        if val_loaders is None:
             val_loss = mean_train_loss
         else:
-            val_loss = evaluate(model, val_loader, device)
+            val_loss = evaluate(model, val_loaders, device)
             logger.info(f"epoch {epoch}/{args.epochs} val_loss={val_loss:.4f}")
 
         if val_loss < best_val_loss:
@@ -129,6 +149,7 @@ def train(model, train_loader, val_loader, device, args, ckpt_dir):
                 {
                     "adapter": model.get_adapter_state_dict(),
                     "class_name": args.class_name,
+                    "train_classes": list(train_loaders.keys()),
                     "dataset": args.dataset,
                     "epoch": epoch,
                     "val_loss": val_loss,
@@ -138,7 +159,7 @@ def train(model, train_loader, val_loader, device, args, ckpt_dir):
             logger.info(f"saved best adapter checkpoint to {best_path}")
 
         if args.save_every_epoch:
-            epoch_path = os.path.join(ckpt_dir, f"{args.class_name}_adapter_epoch_{epoch}.pt")
+            epoch_path = os.path.join(ckpt_dir, f"{checkpoint_stem}_adapter_epoch_{epoch}.pt")
             torch.save({"adapter": model.get_adapter_state_dict(), "epoch": epoch}, epoch_path)
 
     return best_path, best_val_loss
@@ -147,7 +168,7 @@ def train(model, train_loader, val_loader, device, args, ckpt_dir):
 def get_args():
     argument_parser = argparse.ArgumentParser(description="Train a lightweight adapter on top of WinCLIP window features")
     argument_parser.add_argument("--dataset", type=str, default="visa", choices=["mvtec", "visa"])
-    argument_parser.add_argument("--class-name", type=str, default="candle")
+    argument_parser.add_argument("--class-name", type=str, default="all")
     argument_parser.add_argument("--img-resize", type=int, default=240)
     argument_parser.add_argument("--img-cropsize", type=int, default=240)
     argument_parser.add_argument("--resolution", type=int, default=400)
@@ -165,8 +186,10 @@ def get_args():
     argument_parser.add_argument("--weight-decay", type=float, default=1e-4)
     argument_parser.add_argument("--seg-loss-weight", type=float, default=1.0)
     argument_parser.add_argument("--cls-loss-weight", type=float, default=0.5)
-    argument_parser.add_argument("--train-phase", type=str, default="test", choices=["train", "test"])
-    argument_parser.add_argument("--val-phase", type=str, default="", choices=["", "train", "test"])
+    argument_parser.add_argument("--train-phase", type=str, default="train_eval",
+                                 choices=["train", "test", "train_eval", "val_eval"])
+    argument_parser.add_argument("--val-phase", type=str, default="val_eval",
+                                 choices=["", "train", "test", "train_eval", "val_eval"])
     argument_parser.add_argument("--adapter-hidden-dim", type=int, default=256)
     argument_parser.add_argument("--adapter-dropout", type=float, default=0.1)
     argument_parser.add_argument("--adapter-residual-scale", type=float, default=1.0)
@@ -204,16 +227,19 @@ def main(args):
         logger.info(f"{k}: {v}")
     logger.info("=========================================")
 
-    train_loader, _ = get_dataloader_from_args(phase=args.train_phase, **kwargs)
-    val_loader = None
+    training_classes = resolve_training_classes(args.dataset, args.class_name)
+    logger.info(f"training classes: {training_classes}")
+
+    train_loaders = build_dataloaders_for_classes(args.train_phase, training_classes, kwargs)
+    val_loaders = None
     if args.val_phase:
-        val_loader, _ = get_dataloader_from_args(phase=args.val_phase, **kwargs)
+        val_loaders = build_dataloaders_for_classes(args.val_phase, training_classes, kwargs)
 
     model = WinClipAD(**kwargs).to(device)
     if args.adapter_checkpoint:
         model.load_adapter_checkpoint(args.adapter_checkpoint)
 
-    best_path, best_val_loss = train(model, train_loader, val_loader, device, args, ckpt_dir)
+    best_path, best_val_loss = train(model, train_loaders, val_loaders, device, args, ckpt_dir)
     logger.info(f"best checkpoint: {best_path}")
     logger.info(f"best validation loss: {best_val_loss:.4f}")
 

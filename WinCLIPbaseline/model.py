@@ -1,3 +1,4 @@
+import os
 from typing import List, Tuple
 
 import torch
@@ -18,6 +19,10 @@ std_train = [0.26862954, 0.26130258, 0.27577711]
 
 def _convert_to_rgb(image):
     return image.convert("RGB")
+
+
+def _is_valid_pretrained_source(pretrained_dataset: str) -> bool:
+    return pretrained_dataset in valid_pretrained_datasets or os.path.exists(pretrained_dataset)
 
 
 class WinClipAD(torch.nn.Module):
@@ -44,7 +49,8 @@ class WinClipAD(torch.nn.Module):
         self.out_size_h = out_size_h
         self.out_size_w = out_size_w
         self.device = device
-        self.precision = "fp16" if device == "cuda" else "fp32"
+        # self.precision = "fp16" if device == "cuda" else "fp32"
+        self.precision = 'fp32' # cuda
         self.scales = tuple(int(scale) for scale in scales)
         self.use_adapter = bool(kwargs.get("use_adapter", False))
         self.adapter_hidden_dim = int(kwargs.get("adapter_hidden_dim", 256))
@@ -80,7 +86,9 @@ class WinClipAD(torch.nn.Module):
 
     def get_model(self, backbone, pretrained_dataset, scales):
         assert backbone in valid_backbones
-        assert pretrained_dataset in valid_pretrained_datasets
+        assert _is_valid_pretrained_source(pretrained_dataset), (
+            f"Unsupported pretrained source: {pretrained_dataset}"
+        )
 
         model, _, _ = CLIPAD.create_model_and_transforms(
             model_name=backbone,

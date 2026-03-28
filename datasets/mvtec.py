@@ -48,26 +48,35 @@ def load_mvtec(category, k_shot, experiment_indx):
     train_img_path = os.path.join(MVTEC2D_DIR, category, 'train')
     ground_truth_path = os.path.join(MVTEC2D_DIR, category, 'ground_truth')
 
+    train_img_tot_paths, train_gt_tot_paths, train_tot_labels, train_tot_types = load_phase(train_img_path,
+                                                                                            ground_truth_path)
+    test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types = load_phase(test_img_path,
+                                                                                        ground_truth_path)
+
     if k_shot == 0:
-        training_indx = []
-    else:
-        seed_file = os.path.join('./datasets/seeds_mvtec', category, 'selected_samples_per_run.txt')
-        with open(seed_file, 'r') as f:
-            files = f.readlines()
-        begin_str = f'{experiment_indx}-{k_shot}: '
+        return (
+            train_img_tot_paths,
+            train_gt_tot_paths,
+            train_tot_labels,
+            train_tot_types
+        ), (
+            test_img_tot_paths,
+            test_gt_tot_paths,
+            test_tot_labels,
+            test_tot_types
+        )
 
-        training_indx = []
-        for line in files:
-            if line.count(begin_str) > 0:
-                strip_line = line[len(begin_str):-1]
-                index = strip_line.split(' ')
-                training_indx = index
+    seed_file = os.path.join('./datasets/seeds_mvtec', category, 'selected_samples_per_run.txt')
+    with open(seed_file, 'r') as f:
+        files = f.readlines()
+    begin_str = f'{experiment_indx}-{k_shot}: '
 
-    train_img_tot_paths, train_gt_tot_paths, train_tot_labels, \
-    train_tot_types = load_phase(train_img_path, ground_truth_path)
-
-    test_img_tot_paths, test_gt_tot_paths, test_tot_labels, \
-    test_tot_types = load_phase(test_img_path, ground_truth_path)
+    training_indx = []
+    for line in files:
+        if line.count(begin_str) > 0:
+            strip_line = line[len(begin_str):-1]
+            index = strip_line.split(' ')
+            training_indx = index
 
     selected_train_img_tot_paths = []
     selected_train_gt_tot_paths = []
@@ -82,5 +91,14 @@ def load_mvtec(category, k_shot, experiment_indx):
             selected_train_tot_labels.append(label)
             selected_train_tot_types.append(defect_type)
 
-    return (selected_train_img_tot_paths, selected_train_gt_tot_paths, selected_train_tot_labels, selected_train_tot_types), \
-           (test_img_tot_paths, test_gt_tot_paths, test_tot_labels, test_tot_types)
+    return (
+        selected_train_img_tot_paths,
+        selected_train_gt_tot_paths,
+        selected_train_tot_labels,
+        selected_train_tot_types
+    ), (
+        test_img_tot_paths,
+        test_gt_tot_paths,
+        test_tot_labels,
+        test_tot_types
+    )
