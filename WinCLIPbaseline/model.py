@@ -10,6 +10,8 @@ from loguru import logger
 from . import CLIPAD
 from .adapter import ResidualAdapter
 from .ad_prompts import *
+from .fusion_head import FusionHead
+
 valid_backbones = ["ViT-B-16-plus-240"]
 valid_pretrained_datasets = ["laion400m_e32"]
 
@@ -26,23 +28,16 @@ def _is_valid_pretrained_source(pretrained_dataset: str) -> bool:
 
 
 class WinClipAD(torch.nn.Module):
-    """
-    WinCLIP-style inference wrapper.
-
-    Keep CLIPAD unchanged for full-image encoding, but build anomaly maps from
-    pre-transformer patch embeddings and per-window transformer passes.
-    """
-
     def __init__(
-        self,
-        out_size_h,
-        out_size_w,
-        device,
-        backbone,
-        pretrained_dataset,
-        scales,
-        precision="fp32",
-        **kwargs,
+            self,
+            out_size_h,
+            out_size_w,
+            device,
+            backbone,
+            pretrained_dataset,
+            scales,
+            precision="fp32",
+            **kwargs,
     ):
         super(WinClipAD, self).__init__()
 
@@ -50,13 +45,18 @@ class WinClipAD(torch.nn.Module):
         self.out_size_w = out_size_w
         self.device = device
         # self.precision = "fp16" if device == "cuda" else "fp32"
-        self.precision = 'fp32' # cuda
+        self.precision = "fp32"
         self.scales = tuple(int(scale) for scale in scales)
         self.use_adapter = bool(kwargs.get("use_adapter", False))
         self.adapter_hidden_dim = int(kwargs.get("adapter_hidden_dim", 256))
         self.adapter_dropout = float(kwargs.get("adapter_dropout", 0.0))
         self.adapter_residual_scale = float(kwargs.get("adapter_residual_scale", 1.0))
         self.adapter_checkpoint = kwargs.get("adapter_checkpoint", "")
+        self.use_fusion = bool(kwargs.get("use_fusion", False))
+        self.fusion_hidden_dim = int(kwargs.get("fusion_hidden_dim", 32))
+        self.fusion_dropout = float(kwargs.get("fusion_dropout", 0.0))
+        self.fusion_topk = int(kwargs.get("fusion_topk", 3))
+        self.fusion_checkpoint = kwargs.get("fusion_checkpoint", "")
 
         self.get_model(backbone, pretrained_dataset, self.scales)
         self.phrase_form = "{}"
@@ -86,9 +86,7 @@ class WinClipAD(torch.nn.Module):
 
     def get_model(self, backbone, pretrained_dataset, scales):
         assert backbone in valid_backbones
-        assert _is_valid_pretrained_source(pretrained_dataset), (
-            f"Unsupported pretrained source: {pretrained_dataset}"
-        )
+        assert _is_valid_pretrained_source(pretrained_dataset)
 
         model, _, _ = CLIPAD.create_model_and_transforms(
             model_name=backbone,
@@ -108,6 +106,7 @@ class WinClipAD(torch.nn.Module):
         self.grid_size = model.visual.grid_size
         self.feature_dim = int(model.visual.output_dim)
         self.adapter = None
+        self.fusion_head = None
         if self.use_adapter:
             self.adapter = ResidualAdapter(
                 embed_dim=self.feature_dim,
@@ -117,6 +116,14 @@ class WinClipAD(torch.nn.Module):
             ).to(device=self.device, dtype=model_dtype)
             if self.adapter_checkpoint:
                 self.load_adapter_checkpoint(self.adapter_checkpoint)
+        if self.use_fusion:
+            self.fusion_head = FusionHead(
+                input_dim=len(self.scales) * self.fusion_topk,
+                hidden_dim=self.fusion_hidden_dim,
+                dropout=self.fusion_dropout,
+            ).to(device=self.device, dtype=model_dtype)
+            if self.fusion_checkpoint:
+                self.load_fusion_checkpoint(self.fusion_checkpoint)
         self._prepare_window_masks()
         logger.info(f"grid_size: {self.grid_size}")
 
@@ -319,15 +326,10 @@ class WinClipAD(torch.nn.Module):
 
     @torch.no_grad()
     def encode_window_embeddings(self, patch_embeddings: torch.Tensor) -> List[torch.Tensor]:
-        scale_outputs = [[] for _ in self.scales]
-
-        for image_idx in range(patch_embeddings.shape[0]):
-            single_image_patches = patch_embeddings[image_idx : image_idx + 1]
-            for scale_idx, (window_idxes, _) in enumerate(self._iter_window_buffers()):
-                scale_outputs[scale_idx].append(self.encode_selected_patches(single_image_patches, window_idxes))
-
-        # Each [B, num_windows_at_scale, D]
-        return [torch.cat(outputs, dim=0) for outputs in scale_outputs]
+        return [
+            self.encode_selected_patches(patch_embeddings, window_idxes)
+            for window_idxes, _ in self._iter_window_buffers()
+        ]
 
     def adapt_window_embeddings(self, window_embeddings: List[torch.Tensor]) -> List[torch.Tensor]:
         if self.adapter is None:
@@ -351,52 +353,61 @@ class WinClipAD(torch.nn.Module):
 
     def calculate_textual_anomaly_map(self, window_embeddings: List[torch.Tensor]):
         batch_size = window_embeddings[0].shape[0]
-        num_patches = self.grid_size[0] * self.grid_size[1]
-        k = 3 # top k
+        k = self.fusion_topk
 
-        patch_score_sum = window_embeddings[0].new_zeros(batch_size, num_patches)  # [B, L]
-        patch_cover_count = window_embeddings[0].new_zeros(1, num_patches)  # [1, L]
-        weighted_patch_score_sum = window_embeddings[0].new_zeros(batch_size, num_patches)
-        weighted_sum = window_embeddings[0].new_zeros(batch_size, num_patches)
         scale_patch_scores = []
+        fusion_score_parts = []
+        fusion_valid_parts = []
 
         for window_features, (_, window_masks) in zip(window_embeddings, self._iter_window_buffers()):
             window_scores = self.calculate_textual_anomaly_score(window_features)
             # window_scores: [B, num_windows]
             window_masks = window_masks.to(device=window_scores.device, dtype=window_scores.dtype)
             # window_masks: [num_windows, L]
-            """
-            # mean
-            patch_score_sum += window_scores @ window_masks
-            patch_cover_count += window_masks.sum(dim=0, keepdim=True)
-            # weighted mean: weight = window_score ** 2  worse than mean
-            weighted_patch_score_sum += (window_scores **2 @ window_masks)
-            weighted_sum += window_scores @ window_masks
-            """
             masked_scores = window_scores.unsqueeze(-1) * window_masks.unsqueeze(0)
             # [B, num_windows, L]
             masked_scores = masked_scores.masked_fill(window_masks.unsqueeze(0) == 0, float('-inf'))
 
             # top-k within this scale
-            topk_scores, _ = torch.topk(masked_scores, k=k, dim=1)  # [B, k, L]
+            actual_k = min(k, masked_scores.shape[1])
+            topk_scores, _ = torch.topk(masked_scores, k=actual_k, dim=1)  # [B, k, L]
+            if actual_k < k:
+                score_padding = torch.zeros(
+                    batch_size,
+                    k - actual_k,
+                    topk_scores.shape[-1],
+                    device=topk_scores.device,
+                    dtype=topk_scores.dtype,
+                )
+                mask_padding = torch.zeros(
+                    batch_size,
+                    k - actual_k,
+                    topk_scores.shape[-1],
+                    device=topk_scores.device,
+                    dtype=torch.bool,
+                )
+                topk_scores = torch.cat([topk_scores, score_padding], dim=1)
+            else:
+                mask_padding = None
             valid_mask = torch.isfinite(topk_scores)
+            if mask_padding is not None:
+                valid_mask[:, actual_k:, :] = False
             topk_scores = torch.where(valid_mask, topk_scores, torch.zeros_like(topk_scores))
-            valid_count = valid_mask.sum(dim=1).clamp_min(1)
 
-            scale_scores = topk_scores.sum(dim=1) / valid_count  # [B, L]
-            scale_patch_scores.append(scale_scores)
-        # patch_scores: [B, L]
-        """
-        mean
-        patch_scores = patch_score_sum / patch_cover_count.clamp_min(1.0)
-        weighted mean: weight = window_score ** 2
-        patch_scores = weighted_patch_score_sum / weighted_sum.clamp_min(1e-6)
-        """
-        # mean across scales
-        patch_scores = torch.stack(scale_patch_scores, dim=0).max(dim=0).values  # [B, L]
-        # patch_scores = (patch_scores - patch_scores.min(dim=1, keepdim=True)[0]) / (
-        #         patch_scores.max(dim=1, keepdim=True)[0] - patch_scores.min(dim=1, keepdim=True)[0] + 1e-6
-        # )
+            if self.fusion_head is None:
+                valid_count = valid_mask.sum(dim=1).clamp_min(1)
+                scale_scores = topk_scores.sum(dim=1) / valid_count  # [B, L]
+                scale_patch_scores.append(scale_scores)
+
+            fusion_score_parts.append(topk_scores.permute(0, 2, 1))
+            fusion_valid_parts.append(valid_mask.permute(0, 2, 1))
+
+        if self.fusion_head is None:
+            patch_scores = torch.stack(scale_patch_scores, dim=0).max(dim=0).values  # [B, L]
+        else:
+            fusion_scores = torch.cat(fusion_score_parts, dim=-1)  # [B, L, len(scales) * k]
+            fusion_valid_mask = torch.cat(fusion_valid_parts, dim=-1)
+            patch_scores = self.fusion_head(fusion_scores, fusion_valid_mask)
 
         anomaly_map = patch_scores.reshape(batch_size, self.grid_size[0], self.grid_size[1]).unsqueeze(1)
         # anomaly_map: [B, 1, Gh, Gw]
@@ -437,14 +448,32 @@ class WinClipAD(torch.nn.Module):
         self.model.eval()
 
     def get_trainable_parameters(self):
-        if self.adapter is None:
-            return []
-        return self.adapter.parameters()
+        parameters = []
+        if self.adapter is not None:
+            parameters.extend(list(self.adapter.parameters()))
+        if self.fusion_head is not None:
+            parameters.extend(list(self.fusion_head.parameters()))
+        return parameters
 
     def get_adapter_state_dict(self):
         if self.adapter is None:
             raise RuntimeError("Adapter is not enabled.")
         return self.adapter.state_dict()
+
+    def get_adapter_parameters(self):
+        if self.adapter is None:
+            return []
+        return self.adapter.parameters()
+
+    def get_fusion_parameters(self):
+        if self.fusion_head is None:
+            return []
+        return self.fusion_head.parameters()
+
+    def get_fusion_state_dict(self):
+        if self.fusion_head is None:
+            raise RuntimeError("Fusion head is not enabled.")
+        return self.fusion_head.state_dict()
 
     def load_adapter_checkpoint(self, checkpoint_path: str):
         if self.adapter is None:
@@ -458,16 +487,33 @@ class WinClipAD(torch.nn.Module):
         self.adapter.load_state_dict(checkpoint, strict=True)
         logger.info(f"Loaded adapter checkpoint from {checkpoint_path}")
 
+    def load_fusion_checkpoint(self, checkpoint_path: str):
+        if self.fusion_head is None:
+            raise RuntimeError("Fusion head is not enabled.")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        if isinstance(checkpoint, dict):
+            if "fusion" in checkpoint:
+                checkpoint = checkpoint["fusion"]
+            elif "state_dict" in checkpoint:
+                checkpoint = checkpoint["state_dict"]
+        self.fusion_head.load_state_dict(checkpoint, strict=True)
+        logger.info(f"Loaded fusion checkpoint from {checkpoint_path}")
+
     def train_mode(self):
         super().train()
-        if self.adapter is None:
+        if self.adapter is None and self.fusion_head is None:
             self.model.train()
         else:
             self.model.eval()
-            self.adapter.train()
+            if self.adapter is not None:
+                self.adapter.train()
+            if self.fusion_head is not None:
+                self.fusion_head.train()
 
     def eval_mode(self):
         super().eval()
         self.model.eval()
         if self.adapter is not None:
             self.adapter.eval()
+        if self.fusion_head is not None:
+            self.fusion_head.eval()

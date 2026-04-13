@@ -37,10 +37,10 @@ def get_dataloader_from_args(phase, **kwargs):
 
     if phase == 'train':  #few shots
         data_loader = DataLoader(dataset_inst, batch_size=kwargs['batch_size'], shuffle=True,
-                                  num_workers=0)
+                                  num_workers=8)
     else:
         data_loader = DataLoader(dataset_inst, batch_size=kwargs['batch_size'], shuffle=False,
-                                 num_workers=0)
+                                 num_workers=8)
 
     logger.info(f"===> datasets: {kwargs['dataset']}, class name/len: {kwargs['class_name']}/{len(dataset_inst)}, batch size: {kwargs['batch_size']}")
 

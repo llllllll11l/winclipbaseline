@@ -2,7 +2,6 @@
 <p align="center"><img src="assets/teaser.jpg" alt="outline" width="90%"></p>
 Unofficial implementation of:
 
-WinCLIP: Zero-/Few-Shot Anomaly Classification and Segmentation, CVPR 2023 [[Paper]](https://openaccess.thecvf.com/content/CVPR2023/html/Jeong_WinCLIP_Zero-Few-Shot_Anomaly_Classification_and_Segmentation_CVPR_2023_paper.html)
 
 
 ## Citation

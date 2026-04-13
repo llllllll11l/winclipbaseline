@@ -24,6 +24,20 @@ def infer_adapter_checkpoint(adapter_root_dir: str, dataset: str, class_name: st
     return str(checkpoint)
 
 
+def infer_fusion_checkpoint(fusion_root_dir: str, dataset: str, class_name: str, k_shot: int, shared: bool) -> str:
+    exp_name = f"{dataset}-k-{k_shot}"
+    checkpoint_name = f"{dataset}_shared_fusion_best.pt" if shared else f"{class_name}_fusion_best.pt"
+    checkpoint = (
+        Path(fusion_root_dir)
+        / exp_name
+        / "logger"
+        / ("all" if shared else class_name)
+        / "fusion_ckpts"
+        / checkpoint_name
+    )
+    return str(checkpoint)
+
+
 def build_eval_command(args, dataset: str, class_name: str):
     command = [
         sys.executable,
@@ -40,8 +54,8 @@ def build_eval_command(args, dataset: str, class_name: str):
         str(args.resolution),
         "--batch-size",
         str(args.batch_size),
-        "--vis",
-        str(args.vis),
+        "--is_vis",
+        str(args.is_vis),
         "--root-dir",
         args.root_dir,
         "--load-memory",
@@ -89,9 +103,30 @@ def build_eval_command(args, dataset: str, class_name: str):
                 adapter_checkpoint,
             ]
         )
-
+    if args.use_fusion:
+        fusion_checkpoint_dataset = args.fusion_train_dataset or dataset
+        fusion_checkpoint = args.fusion_checkpoint or infer_fusion_checkpoint(
+            fusion_root_dir=args.fusion_root_dir,
+            dataset=fusion_checkpoint_dataset,
+            class_name=class_name,
+            k_shot=args.k_shot,
+            shared=args.shared_fusion,
+        )
+        command.extend(
+            [
+                "--use-fusion",
+                "true",
+                "--fusion-hidden-dim",
+                str(args.fusion_hidden_dim),
+                "--fusion-dropout",
+                str(args.fusion_dropout),
+                "--fusion-topk",
+                str(args.fusion_topk),
+                "--fusion-checkpoint",
+                fusion_checkpoint,
+            ]
+        )
     return command
-
 
 def get_args():
     parser = argparse.ArgumentParser(description="Run WinCLIP evaluation across all classes in one or more datasets")
@@ -100,7 +135,7 @@ def get_args():
     parser.add_argument("--img-cropsize", type=int, default=240)
     parser.add_argument("--resolution", type=int, default=400)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--vis", type=str2bool, choices=[True, False], default=True)
+    parser.add_argument("--is_vis", type=str2bool, choices=[True, False], default=False)
     parser.add_argument("--root-dir", type=str, default="./result_winclip")
     parser.add_argument("--load-memory", type=str2bool, default=True)
     parser.add_argument("--cal-pro", type=str2bool, default=True)
@@ -119,6 +154,14 @@ def get_args():
     parser.add_argument("--adapter-checkpoint", type=str, default="")
     parser.add_argument("--adapter-root-dir", type=str, default="./result_adapter")
     parser.add_argument("--shared-adapter", type=str2bool, default=True)
+    parser.add_argument("--use-fusion", type=str2bool, default=False)
+    parser.add_argument("--fusion-hidden-dim", type=int, default=32)
+    parser.add_argument("--fusion-dropout", type=float, default=0.0)
+    parser.add_argument("--fusion-topk", type=int, default=3)
+    parser.add_argument("--fusion-checkpoint", type=str, default="")
+    parser.add_argument("--fusion-root-dir", type=str, default="./result_fusion_head")
+    parser.add_argument("--fusion-train-dataset", type=str, default="mvtec", choices=["", "mvtec", "visa"])
+    parser.add_argument("--shared-fusion", type=str2bool, default=True)
     return parser.parse_args()
 
 

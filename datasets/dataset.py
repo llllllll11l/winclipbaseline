@@ -65,7 +65,7 @@ class CLIPDataset(Dataset):
         img = cv2.imread(img_path, cv2.IMREAD_COLOR)
 
         if gt == 0:
-            gt = np.zeros([img.shape[0], img.shape[0]])
+            gt = np.zeros([img.shape[0], img.shape[1]], dtype=np.uint8)
         else:
             gt = cv2.imread(gt, cv2.IMREAD_GRAYSCALE)
             gt[gt > 0] = 255

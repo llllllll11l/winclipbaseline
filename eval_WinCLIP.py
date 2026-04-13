@@ -117,7 +117,7 @@ def main(args):
     model = model.to(device)
 
     # as the pro metric calculation is costly, we only calculate it in the last evaluation
-    metrics = test(model, test_dataloader, device, is_vis=True, img_dir=img_dir,
+    metrics = test(model, test_dataloader, device, is_vis=kwargs['is_vis'], img_dir=img_dir,
                    class_name=kwargs['class_name'], cal_pro=kwargs['cal_pro'], train_data=train_dataloader,
                    resolution=kwargs['resolution'])
 
@@ -136,7 +136,7 @@ def str2bool(v):
 
 def get_args():
     argument_parser = argparse.ArgumentParser(description='Anomaly detection')
-    argument_parser.add_argument('--dataset', type=str, default='visa', choices=['mvtec', 'visa'])
+    argument_parser.add_argument('--dataset', type=str, default='mvtec', choices=['mvtec', 'visa'])
     argument_parser.add_argument('--class-name', type=str, default='candle')
 
     argument_parser.add_argument('--img-resize', type=int, default=240)
@@ -144,10 +144,10 @@ def get_args():
     argument_parser.add_argument('--resolution', type=int, default=400)
 
     argument_parser.add_argument('--batch-size', type=int, default=128)
-    argument_parser.add_argument('--vis', type=str2bool, choices=[True, False], default=True)
+    argument_parser.add_argument('--is_vis', type=str2bool, choices=[True, False], default=True)
     argument_parser.add_argument("--root-dir", type=str, default="./result_winclip")
     argument_parser.add_argument("--load-memory", type=str2bool, default=True)
-    argument_parser.add_argument("--cal-pro", type=str2bool, default=True)
+    argument_parser.add_argument("--cal-pro", type=str2bool, default=False)
     argument_parser.add_argument("--experiment_index", type=int, default=0)
     argument_parser.add_argument("--gpu-id", type=int, default=0)
 
@@ -165,6 +165,11 @@ def get_args():
     argument_parser.add_argument("--adapter-dropout", type=float, default=0.0)
     argument_parser.add_argument("--adapter-residual-scale", type=float, default=1.0)
     argument_parser.add_argument("--adapter-checkpoint", type=str, default="")
+    argument_parser.add_argument("--use-fusion", type=str2bool, default=False)
+    argument_parser.add_argument("--fusion-hidden-dim", type=int, default=32)
+    argument_parser.add_argument("--fusion-dropout", type=float, default=0.0)
+    argument_parser.add_argument("--fusion-topk", type=int, default=3)
+    argument_parser.add_argument("--fusion-checkpoint", type=str, default="")
 
     argument_parser.add_argument("--use-cpu", type=int, default=0)
 

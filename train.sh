@@ -1,3 +1,11 @@
-#!/bin/bash
-
-python3 train_adapter.py --dataset mvtec --class-name bottle --train-phase test --val-phase test
+python train_adapter.py \
+  --dataset mvtec \
+  --class-name all \
+  --train-phase train_eval \
+  --val-phase val_eval \
+  --batch-size 32 \
+  --k-shot 0 \
+  --gpu-id 0 \
+  --use-cpu 0 \
+  --epochs 20 \
+  --pretrained_dataset /root/winclipbaseline/checkpoints/vit_b_16_plus_240-laion400m_e32-699c4b84.pt
