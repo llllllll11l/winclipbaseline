@@ -1,6 +1,7 @@
 import argparse
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from datasets import dataset_classes
@@ -76,6 +77,8 @@ def build_eval_command(args, dataset: str, class_name: str):
         args.pretrained_dataset,
         "--use-cpu",
         str(args.use_cpu),
+        "--csv-timestamp",
+        args.csv_timestamp,
     ]
 
     if args.scales:
@@ -162,11 +165,14 @@ def get_args():
     parser.add_argument("--fusion-root-dir", type=str, default="./result_fusion_head")
     parser.add_argument("--fusion-train-dataset", type=str, default="mvtec", choices=["", "mvtec", "visa"])
     parser.add_argument("--shared-fusion", type=str2bool, default=True)
+    parser.add_argument("--csv-timestamp", type=str, default="")
     return parser.parse_args()
 
 
 def main():
     args = get_args()
+    if not args.csv_timestamp:
+        args.csv_timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time()))
 
     for dataset in args.datasets:
         for class_name in dataset_classes[dataset]:

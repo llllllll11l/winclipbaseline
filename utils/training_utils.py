@@ -27,9 +27,15 @@ def setup_seed(seed):
 def get_dir_from_args(root_dir, class_name, **kwargs):
 
     exp_name = f"{kwargs['dataset']}-k-{kwargs['k_shot']}"
+    csv_timestamp = kwargs.get("csv_timestamp")
+    if not csv_timestamp:
+        csv_timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time()))
 
     csv_dir = os.path.join(root_dir, 'csv')
-    csv_path = os.path.join(csv_dir, f"{exp_name}-indx-{kwargs['experiment_index']}.csv")
+    csv_path = os.path.join(
+        csv_dir,
+        f"{exp_name}-indx-{kwargs['experiment_index']}-{csv_timestamp}.csv",
+    )
 
     model_dir = os.path.join(root_dir, exp_name, 'models')
     img_dir = os.path.join(root_dir, exp_name, 'imgs')

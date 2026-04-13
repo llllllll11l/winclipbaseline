@@ -126,8 +126,19 @@ def main(args):
     for k, v in metrics.items():
         logger.info(f"{kwargs['class_name']}======={k}: {v:.2f}")
 
-    save_metric(metrics, dataset_classes[kwargs['dataset']], kwargs['class_name'],
-                kwargs['dataset'], csv_path)
+    metric_params = {
+        key: value
+        for key, value in kwargs.items()
+        if key not in {"class_name", "device", "out_size_h", "out_size_w"}
+    }
+    save_metric(
+        metrics,
+        dataset_classes[kwargs['dataset']],
+        kwargs['class_name'],
+        kwargs['dataset'],
+        csv_path,
+        params=metric_params,
+    )
 
 
 def str2bool(v):
@@ -172,6 +183,7 @@ def get_args():
     argument_parser.add_argument("--fusion-checkpoint", type=str, default="")
 
     argument_parser.add_argument("--use-cpu", type=int, default=0)
+    argument_parser.add_argument("--csv-timestamp", type=str, default="")
 
     args = argument_parser.parse_args()
 
